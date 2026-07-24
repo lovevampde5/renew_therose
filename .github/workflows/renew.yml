@@ -25,12 +25,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 安装系统依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
-        timeout-minutes: 5
-
       - name: 安装 Python 依赖
         run: |
           pip install --upgrade pip
@@ -43,8 +37,9 @@ jobs:
           PASSWORD: ${{ secrets.PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          HEADLESS: "true"
         run: |
-          xvfb-run -a -s "-screen 0 1920x1080x24" python renew_therose.py
+          python renew_therose.py
         timeout-minutes: 10
 
       - name: 上传截图（失败时保留）

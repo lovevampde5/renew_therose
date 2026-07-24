@@ -2,12 +2,14 @@
 
 import os,re,sys,time,requests
 from seleniumbase import SB
+from selenium.common.exceptions import TimeoutException
 
 # 环境变量 
 EMAIL = os.environ.get("EMAIL") or ""            # 邮箱   
 PASSWORD = os.environ.get("PASSWORD") or ""      # 密码
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""  # tg通知 bot token
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID") or ""      # tg通知 chat_id id
+HEADLESS = os.environ.get("HEADLESS", "true").lower() == "true"  # 无头模式
 
 BASE_URL = "https://client.therose.cloud/login"
 
@@ -91,47 +93,86 @@ def send_tg(token, chat_id, message):
         print(f"❌ Telegram 发送异常: {e}")
 
 # 登录流程
-def login(sb, email, password):
-    print("🌐 打开登录页面...")
-    print("⏳ 等待页面加载...")
-    sb.open(BASE_URL)
-    sb.wait_for_ready_state_complete()
-    sb.sleep(1)
-    print("📧 填写邮箱...")
-    sb.type('#login_form_email', email, timeout=10)
-    print("🔑 填写密码...")
-    sb.type('#login_form_password', password, timeout=10)
-    time.sleep(1) 
-    print("🛡 处理 Turnstile...")
-    try:
-        sb.uc_gui_click_captcha()
-        print("✅ Turnstile 验证已处理")
-        # sb.save_screenshot("turnstile_passed.png")
-    except Exception as e:
-        print(f"⚠️ uc_gui_click_captcha 执行异常: {e}")
-    print("🔑 点击登录按钮...")
-    sb.uc_click('button:contains("Sign in")')
-    sb.sleep(3)
-    for _ in range(30):
-        # 判断是否登录成功
-        current_url = sb.get_current_url()
-        page_title = sb.get_title() or ""
-        print(f"📄 当前 URL: {current_url} | Title: {page_title}")
-        if "panel" in current_url:
-            print("✅ 登录成功，已跳转到 Dashboard")
-            # sb.save_screenshot("login_success.png")
-            return True, current_url
+def login(sb, email, password, max_retries=3):
+    for attempt in range(1, max_retries + 1):
+        if attempt > 1:
+            print(f"\n🔄 第 {attempt} 次重试登录...")
+            sb.open(BASE_URL)
+            sb.wait_for_ready_state_complete()
+            sb.sleep(1)
+
+        print("🌐 打开登录页面...")
+        print("⏳ 等待页面加载...")
+        if attempt == 1:
+            sb.open(BASE_URL)
+            sb.wait_for_ready_state_complete()
+            sb.sleep(1)
+        print("📧 填写邮箱...")
+        sb.type('#login_form_email', email, timeout=10)
+        print("🔑 填写密码...")
+        sb.type('#login_form_password', password, timeout=10)
         time.sleep(1)
 
-    print(f"❌ 登录失败，当前 URL: {sb.get_current_url()}")
-    sb.save_screenshot("login_faild.png")
+        # 先尝试 WebDriver 方式点击 Turnstile（适用于 xvfb/headless）
+        print("🛡 处理 Turnstile（WebDriver 方式）...")
+        try:
+            sb.uc_click_captcha()
+            print("✅ Turnstile 已验证")
+        except Exception as e:
+            print(f"⚠️ uc_click_captcha 异常: {e}")
+            # 回退到 GUI 方式（本地有显示器时可用）
+            try:
+                sb.uc_gui_click_captcha()
+                print("✅ Turnstile 已验证（GUI 方式）")
+            except Exception as e2:
+                print(f"⚠️ 两种方式都失败: {e2}")
+
+        print("🔑 点击登录按钮...")
+        try:
+            sb.uc_click('button:contains("Sign in")', timeout=10)
+        except Exception as e:
+            print(f"⚠️ 点击登录按钮异常: {e}")
+            continue
+
+        sb.sleep(3)
+
+        # 等待跳转，最多 30 秒
+        for _ in range(30):
+            current_url = sb.get_current_url()
+            page_title = sb.get_title() or ""
+            print(f"📄 当前 URL: {current_url} | Title: {page_title}")
+            if "panel" in current_url:
+                print("✅ 登录成功，已跳转到 Dashboard")
+                return True, current_url
+            time.sleep(1)
+
+        # 如果还停留在登录页，可能是 Turnstile 弹出了交互式挑战
+        print("⚠️ 未跳转，尝试处理可能弹出的 Turnstile 挑战...")
+        try:
+            # 有时 Turnstile 在点击登录后才弹出
+            sb.uc_click_captcha(timeout=3)
+            print("✅ 处理了弹出的 Turnstile，再次点击登录...")
+            sb.uc_click('button:contains("Sign in")', timeout=10)
+            sb.sleep(3)
+            for _ in range(30):
+                current_url = sb.get_current_url()
+                if "panel" in current_url:
+                    print("✅ 登录成功，已跳转到 Dashboard")
+                    return True, current_url
+                time.sleep(1)
+        except Exception:
+            pass
+
+        print(f"❌ 第 {attempt} 次登录失败")
+        sb.save_screenshot(f"login_failed_attempt_{attempt}.png")
+
     return False, sb.get_current_url()
 
 # 主流程
 def main():
     print("🚀 启动浏览器")
 
-    with SB(uc=True, headless=False) as sb:
+    with SB(uc=True, headless=HEADLESS) as sb:
         success, url = login(sb, EMAIL, PASSWORD)
         
         if not success:
