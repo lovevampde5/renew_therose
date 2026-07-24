@@ -1,57 +1,65 @@
-name: Renew TheRose
+name: Auto Renew therose
 
 on:
-  schedule:
-    # 北京时间每天 08:00 运行 (UTC 00:00)，自行根据服务到期时间调整
-    - cron: '0 0 * * *'
   workflow_dispatch:
-    inputs:
-      debug:
-        description: '调试模式（保留截图）'
-        type: boolean
-        default: false
+  schedule:
+    - cron: '*/55 * * * *'
+
+# 限制并发运行：如果当前有正在运行的相同工作流，则取消旧的运行新任务
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  contents: read
 
 jobs:
-  renew:
+  Renew-therose:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      actions: write
-      contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4 # 修正为当前最新的 v4 版本
 
-      - name: ⚙ 设置 Python
+      - name: ⚙️ 设置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
+          # 删掉了 cache: 'pip' 这一行
 
-      - name: 🛠 安装系统依赖和 Python 依赖
+      - name: 🛠️ 安装系统依赖和 Python 依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb x11-utils fonts-noto-cjk jq wget
-          pip install --upgrade pip
+          sudo apt-get install -y xvfb
           pip install seleniumbase requests
           seleniumbase install chromedriver
-        timeout-minutes: 5
 
-      - name: ⚙ 设置代理（sing-box，固定节点）
+      - name: 🌐 设置代理 (sing-box)
         env:
           NODE_LINK: ${{ secrets.NODE_LINK }}
         run: |
           bash <(wget -qO- https://main.ssss.nyc.mn/setup_proxy.sh)
 
-      - name: 🚀 运行续期脚本
+      - name: 🚀 运行续期与重启脚本
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          HEADLESS: "true"
-        run: |
-          xvfb-run --auto-servernum python renew_therose.py
-        timeout-minutes: 10
+          SERVER_URL: ${{ secrets.SERVER_URL }} # [新增] 传递服务器面板链接
+          IS_PROXY: ${{ env.IS_PROXY }}
+          PROXY_SERVER: ${{ env.PROXY_SERVER }}
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python3 therose.py
+
+      - name: 📤 上传运行截图 (用于排错)
+        if: always() # 无论成功或失败都会执行
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-screenshots
+          path: ./*.png # 捕获根目录下所有的截图
+          retention-days: 3 # 截图保留3天即可
 
       - name: 🧽 清理进程和临时文件
         if: always()
@@ -76,12 +84,3 @@ jobs:
               gh run delete $run_id || true
             fi
           done
-
-      - name: 📎 上传截图（失败时保留）
-        if: ${{ always() && (failure() || inputs.debug) }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshots-${{ github.run_id }}
-          path: |
-            *.png
-          retention-days: 7
