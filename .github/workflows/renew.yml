@@ -1,0 +1,57 @@
+name: Renew TheRose
+
+on:
+  schedule:
+    # 北京时间每天 08:00 运行 (UTC 00:00)
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: '调试模式（保留截图）'
+        type: boolean
+        default: false
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+        timeout-minutes: 5
+
+      - name: 安装 Python 依赖
+        run: |
+          pip install --upgrade pip
+          pip install seleniumbase requests
+        timeout-minutes: 5
+
+      - name: 运行续期脚本
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          xvfb-run -a -s "-screen 0 1920x1080x24" python renew_therose.py
+        timeout-minutes: 10
+
+      - name: 上传截图（失败时保留）
+        if: ${{ always() && (failure() || inputs.debug) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ github.run_id }}
+          path: |
+            *.png
+          retention-days: 7
