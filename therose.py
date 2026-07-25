@@ -294,38 +294,32 @@ def reboot_server(sb, url):
                 print(f"❌ SeleniumBase 点击 '{target_text}' 失败: {e}")
 
         # ==========================================
-        # 4. 处理确认弹窗 + 验证状态变化
+        # 4. 处理确认弹窗 + 等待跳转总览页验证状态
         # ==========================================
         if btn_clicked:
             # 如果有确认弹窗，点击它
             click_confirm_modal(sb)
 
             print(f"⏳ 等待服务器{action_name}生效（最长等 60 秒）...")
-            # 等待状态变化（每 2 秒检查一次）
+
+            # 点击 Start/Restart 后，主动打开总览页检测 Online 状态
+            time.sleep(5)  # 先等几秒让命令执行
             success = False
-            for i in range(30):
-                time.sleep(2)
+            for i in range(55):
                 try:
-                    cur_source = sb.get_page_source().lower()
+                    # 每次循环主动跳转到总览页刷新状态
+                    sb.open("https://panel.therose.cloud")
+                    sb.wait_for_ready_state_complete()
+                    time.sleep(1)
+                    source = sb.get_page_source().lower()
                 except Exception:
+                    time.sleep(2)
                     continue
 
-                if action_name == "启动":
-                    # 启动成功后应该出现 online / running 或 Start 消失
-                    if "online" in cur_source or "running" in cur_source:
-                        success = True
-                        break
-                    # 如果 Start 变灰/消失，也算
-                    if "start" not in cur_source:
-                        # 检查是否变成 Restart/Stop 组合
-                        if "restart" in cur_source:
-                            success = True
-                            break
-                else:
-                    # 重启成功后可能短暂 restarting，然后回到 online
-                    if "restarting" in cur_source or "online" in cur_source or "running" in cur_source:
-                        success = True
-                        break
+                if "online" in source:
+                    success = True
+                    print(f"  ✅ 总览页检测到 Online 状态 ({i+1}次检查)")
+                    break
 
             if success:
                 return True, f"✅ 服务器{action_name}成功：检测到状态变为在线"
