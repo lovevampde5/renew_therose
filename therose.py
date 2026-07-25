@@ -184,13 +184,13 @@ def login(sb, email, password):
     sb.save_screenshot("login_failed.png")
     return False, sb.get_current_url()
 
-# 执行重启服务器操作
+# 执行重启/启动服务器操作
 def reboot_server(sb, url):
-    print(f"🔄 准备进入服务器面板进行重启: {url}")
+    print(f"🔄 准备进入服务器面板: {url}")
     try:
         sb.open(url)
         sb.wait_for_ready_state_complete()
-        time.sleep(5) # 给面板一点时间加载状态
+        time.sleep(5)  # 给面板一点时间加载状态
         
         # ==========================================
         # 1. 处理控制面板需要独立登录的情况
@@ -198,31 +198,22 @@ def reboot_server(sb, url):
         if sb.is_element_visible('input[type="password"]'):
             print("🔒 检测到控制面板需要独立登录，正在尝试自动输入账号密码...")
             try:
-                # 输入账号 (兼容不同的输入框 name 属性)
                 if sb.is_element_visible('input[name="user"]'):
                     sb.type('input[name="user"]', EMAIL)
                 elif sb.is_element_visible('input[type="text"]'):
                     sb.type('input[type="text"]', EMAIL)
-                
-                # 输入密码
                 sb.type('input[type="password"]', PASSWORD)
                 time.sleep(1)
-                
-                # 尝试处理人机验证 (如果存在)
                 try:
                     sb.uc_gui_click_captcha()
                 except Exception:
-                    pass # 如果没有验证码或点击报错，则直接跳过
-                
-                time.sleep(3) 
-                
-                # 点击登录按钮
+                    pass
+                time.sleep(3)
                 try:
                     sb.click('button:contains("Login")')
                 except Exception:
                     sb.click('button[type="submit"]')
-                    
-                time.sleep(8) # 等待登录完成并跳转
+                time.sleep(8)
             except Exception as e:
                 print(f"⚠️ 自动登录控制面板发生错误: {e}")
         
@@ -237,73 +228,110 @@ def reboot_server(sb, url):
             time.sleep(6)
 
         # ==========================================
-        # 3. 寻找并点击“重启”按钮
+        # 3. 判断服务器状态，点击正确的按钮
         # ==========================================
-        reboot_selectors = [
-            'button[data-action="restart"]',
-            'button i.fa-redo',
-            'button i.fa-sync'
-        ]
-        
+        def click_button_by_text(sb, text):
+            """通过按钮文字精确点击可见且未禁用的按钮"""
+            return sb.driver.execute_script("""
+                const target = arguments[0].toLowerCase().trim();
+                const buttons = document.querySelectorAll('button');
+                for (const btn of buttons) {
+                    const rect = btn.getBoundingClientRect();
+                    const visible = rect.width > 0 && rect.height > 0;
+                    const enabled = !btn.disabled;
+                    const label = (btn.innerText || btn.textContent || '').trim().toLowerCase();
+                    if (visible && enabled && label === target) {
+                        btn.scrollIntoView({block: 'center', inline: 'center'});
+                        btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            """, text)
+
+        def click_confirm_modal(sb):
+            """点击可能的确认弹窗"""
+            for kw in ["Confirm", "Yes", "确定", "确认"]:
+                try:
+                    if click_button_by_text(sb, kw):
+                        print(f"  ✅ 已点击确认弹窗: {kw}")
+                        time.sleep(1)
+                        return True
+                except Exception:
+                    pass
+            return False
+
+        # 读取页面文本判断服务器状态
+        try:
+            source = sb.get_page_source().lower()
+        except Exception:
+            source = ""
+
+        # 判断是否离线：优先看是否有 Offline 字样
+        is_offline = "offline" in source
+
         btn_clicked = False
-        
-        # 方案 A: 通过常规 CSS 选择器点击
-        for sel in reboot_selectors:
-            try:
-                if sb.is_element_visible(sel):
-                    print(f"✅ 找到重启按钮，选择器: {sel}")
-                    sb.uc_click(sel)
-                    btn_clicked = True
-                    break
-            except Exception:
-                continue
-                
-        # 方案 B: 降级方案（JS 直接定位右上角的中间按钮）
+        action_name = ""
+
+        if is_offline:
+            print("🟡 检测到服务器处于 Offline 状态，优先点击 Start 按钮...")
+            btn_clicked = click_button_by_text(sb, "Start")
+            action_name = "启动"
+        else:
+            print("🟢 服务器在线，准备点击 Restart 按钮...")
+            btn_clicked = click_button_by_text(sb, "Restart")
+            action_name = "重启"
+
+        # 兜底：JS 找不到就用 SeleniumBase contains
         if not btn_clicked:
-            print("⚠️ 未能通过常规选择器找到按钮，正在使用 JavaScript 定位中间的重启按钮...")
+            target_text = "Start" if is_offline else "Restart"
+            print(f"⚠️ 文字精确匹配未找到，尝试 SeleniumBase contains: '{target_text}'")
             try:
-                btn_clicked = sb.driver.execute_script("""
-                    const buttons = document.querySelectorAll('div.flex.items-center button, div.items-center button');
-                    
-                    // 1. 先尝试通过特征匹配
-                    for (let btn of buttons) {
-                        if (btn.getAttribute('data-action') === 'restart' || 
-                            btn.innerHTML.includes('fa-redo') || 
-                            btn.innerHTML.includes('fa-sync')) {
-                            btn.click();
-                            return true;
-                        }
-                    }
-                    
-                    // 2. 如果特征匹配失败，直接点击三个按钮中的中间那一个 (索引为 1)
-                    if (buttons.length >= 3) {
-                        buttons[1].click(); 
-                        return true;
-                    } else if (buttons.length >= 2) {
-                        // 如果只有两个按钮，通常是 启动 和 重启，重启在最后
-                        buttons[buttons.length - 1].click();
-                        return true;
-                    }
-                    return false;
-                """)
-                if btn_clicked:
-                    print("✅ 通过 JavaScript 成功点击了中间的重启按钮")
-            except Exception as ex:
-                print(f"⚠️ JS 降级点击失败: {ex}")
-                
+                sb.uc_click(f'button:contains("{target_text}")', timeout=5)
+                btn_clicked = True
+                action_name = "启动" if is_offline else "重启"
+            except Exception as e:
+                print(f"❌ SeleniumBase 点击 '{target_text}' 失败: {e}")
+
         # ==========================================
-        # 4. 验证结果
+        # 4. 处理确认弹窗 + 等待跳转总览页验证状态
         # ==========================================
         if btn_clicked:
-            print("⏳ 等待重启命令发送...")
-            time.sleep(3)
-            return True, "已成功发送重启指令"
+            # 如果有确认弹窗，点击它
+            click_confirm_modal(sb)
+
+            print(f"⏳ 等待服务器{action_name}生效（最长等 60 秒）...")
+
+            # 点击 Start/Restart 后，主动打开总览页检测 Online 状态
+            time.sleep(5)  # 先等几秒让命令执行
+            success = False
+            for i in range(55):
+                try:
+                    # 每次循环主动跳转到总览页刷新状态
+                    sb.open("https://panel.therose.cloud")
+                    sb.wait_for_ready_state_complete()
+                    time.sleep(1)
+                    source = sb.get_page_source().lower()
+                except Exception:
+                    time.sleep(2)
+                    continue
+
+                if "online" in source:
+                    success = True
+                    print(f"  ✅ 总览页检测到 Online 状态 ({i+1}次检查)")
+                    break
+
+            if success:
+                return True, f"✅ 服务器{action_name}成功：检测到状态变为在线"
+            else:
+                sb.save_screenshot("reboot_unknown.png")
+                return False, f"⚠️ 已点击{action_name}按钮，但 60 秒内未检测到服务器状态变化"
         else:
-            return False, "页面上未检测到重启按钮"
-            
+            return False, "❌ 页面上未找到可点击的 Start / Restart 按钮"
+
     except Exception as e:
-        # 这个 except 捕获最外层 try 的异常，防止语法错误
         return False, f"重启操作发生异常: {e}"
+
 # 主流程
 def main():
     print("🚀 启动浏览器")
