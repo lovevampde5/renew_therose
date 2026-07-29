@@ -351,7 +351,10 @@ def reboot_server(sb, url):
         return False, f"重启操作发生异常: {e}"
 
 # 主流程
-def main():
+MAX_RETRIES = 3
+
+def run_once():
+    """单次完整执行流程，返回 (success, msg)"""
     print("🚀 启动浏览器")
 
     if IS_PROXY:
@@ -368,16 +371,14 @@ def main():
 
     with SB(**sb_kwargs) as sb:
         success, url = login(sb, EMAIL, PASSWORD)
-        
+
         if not success:
-            msg = f"❌ 登录失败，请检查账号密码或验证码拦截情况。"
-            print(msg)
-            send_tg(TG_BOT_TOKEN, TG_CHAT_ID, msg)
-            return
+            return False, "登录失败，请检查账号密码或验证码拦截情况"
 
         print("📄 开始续期流程...")
         ok, info = click_extend_button(sb)
-        
+
+        msg_renewal = ""
         # 续期逻辑
         if not ok:
             if info.get("not_time"):
@@ -398,7 +399,7 @@ def main():
             except Exception as e:
                 msg_renewal = f"❌ 点击 Order now 发生错误: {e}。"
                 print(msg_renewal)
-            
+
             print("🔍 检查续期结果...")
             renewal_success, renewal_msg = check_renewal_success(sb)
             if renewal_success:
@@ -409,10 +410,10 @@ def main():
                 sb.save_screenshot("renewal_failed.png")
             print(msg_renewal)
 
-        # 重启逻辑 (与续期独立，均会执行)
+        # 重启逻辑
         print("🔄 开始检查并执行服务器重启...")
         reboot_ok, reboot_msg = reboot_server(sb, SERVER_URL)
-        
+
         if reboot_ok:
             msg_reboot = f"✅ 自动重启成功: {reboot_msg}"
             sb.save_screenshot("reboot_success.png")
@@ -420,11 +421,38 @@ def main():
             msg_reboot = f"⚠️ 重启失败: {reboot_msg}"
             sb.save_screenshot("reboot_failed.png")
         print(msg_reboot)
-        
-        # 汇总发送通知
-        final_msg = f"{msg_renewal}\n---\n{msg_reboot}"
-        send_tg(TG_BOT_TOKEN, TG_CHAT_ID, final_msg)
 
+        final_msg = f"{msg_renewal}\n---\n{msg_reboot}"
+        return True, final_msg
+
+
+def main():
+    final_msg = ""
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"\n{'='*50}")
+        print(f"🔄 第 {attempt}/{MAX_RETRIES} 次尝试")
+        print(f"{'='*50}")
+
+        try:
+            ok, msg = run_once()
+            if ok:
+                final_msg = msg
+                print(f"\n✅ 第 {attempt} 次尝试成功")
+                break
+            else:
+                print(f"\n❌ 第 {attempt} 次尝试失败: {msg}")
+                final_msg = f"第 {attempt} 次失败: {msg}"
+        except Exception as e:
+            print(f"\n❌ 第 {attempt} 次尝试异常: {e}")
+            final_msg = f"第 {attempt} 次异常: {e}"
+
+        if attempt < MAX_RETRIES:
+            wait_sec = 10 * attempt
+            print(f"⏳ 等待 {wait_sec} 秒后重试...")
+            time.sleep(wait_sec)
+
+    # 汇总发送通知
+    send_tg(TG_BOT_TOKEN, TG_CHAT_ID, final_msg)
     print("🏁 脚本执行完毕")
 
 if __name__ == "__main__":
