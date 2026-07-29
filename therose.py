@@ -144,24 +144,12 @@ def login(sb, email, password):
     print("🔑 填写密码...")
     sb.type('#login_form_password', password, timeout=10)
     time.sleep(1) 
-    print("🛡 处理 Turnstile...")
-    turnstile_ok = False
-    for ts_attempt in range(3):
-        try:
-            sb.uc_gui_click_captcha()
-            print(f"✅ Turnstile 验证已处理（第 {ts_attempt + 1} 次尝试）")
-            turnstile_ok = True
-            break
-        except Exception as e:
-            print(f"⚠️ Turnstile 第 {ts_attempt + 1} 次尝试失败: {e}")
-            sb.sleep(2)
-
-    # 轮询等待 Turnstile token 生效（最多等 15 秒）
-    print("⏳ 等待验证 token 生效...")
+    # Turnstile 是 managed 模式（自动后台验证），不需要手动点击
+    # 只需等待 token 自动生成，如果需要交互式挑战再处理
+    print("🛡 等待 Turnstile 验证...")
     token_ready = False
-    for wait_i in range(15):
+    for wait_i in range(20):
         try:
-            # 检查 Turnstile iframe 内是否有成功标记
             token_val = sb.execute_script(
                 "return document.querySelector('[name=\"cf-turnstile-response\"]')?.value || ''"
             )
@@ -171,10 +159,18 @@ def login(sb, email, password):
                 break
         except Exception:
             pass
+        # 如果超过5秒还没 token，尝试点击（可能需要交互式挑战）
+        if wait_i == 5:
+            print("⚠️ 5秒内未自动生成 token，尝试手动处理...")
+            try:
+                sb.uc_gui_click_captcha()
+                print("✅ 手动 Turnstile 处理完成")
+            except Exception as e:
+                print(f"⚠️ 手动处理异常: {e}")
         sb.sleep(1)
 
     if not token_ready:
-        print("⚠️ Turnstile token 未检测到，尝试直接登录...")
+        print("⚠️ Turnstile token 未就绪，尝试直接登录...")
 
     for attempt in range(3):
         print(f"🔑 点击登录按钮...(第 {attempt + 1} 次)")
