@@ -145,14 +145,36 @@ def login(sb, email, password):
     sb.type('#login_form_password', password, timeout=10)
     time.sleep(1) 
     print("🛡 处理 Turnstile...")
-    try:
-        sb.uc_gui_click_captcha()
-        print("✅ Turnstile 验证已处理")
-    except Exception as e:
-        print(f"⚠️ uc_gui_click_captcha 执行异常: {e}")
-        
+    turnstile_ok = False
+    for ts_attempt in range(3):
+        try:
+            sb.uc_gui_click_captcha()
+            print(f"✅ Turnstile 验证已处理（第 {ts_attempt + 1} 次尝试）")
+            turnstile_ok = True
+            break
+        except Exception as e:
+            print(f"⚠️ Turnstile 第 {ts_attempt + 1} 次尝试失败: {e}")
+            sb.sleep(2)
+
+    # 轮询等待 Turnstile token 生效（最多等 15 秒）
     print("⏳ 等待验证 token 生效...")
-    sb.sleep(2)
+    token_ready = False
+    for wait_i in range(15):
+        try:
+            # 检查 Turnstile iframe 内是否有成功标记
+            token_val = sb.execute_script(
+                "return document.querySelector('[name=\"cf-turnstile-response\"]')?.value || ''"
+            )
+            if token_val and len(token_val) > 10:
+                print(f"✅ Turnstile token 已就绪 (长度: {len(token_val)})")
+                token_ready = True
+                break
+        except Exception:
+            pass
+        sb.sleep(1)
+
+    if not token_ready:
+        print("⚠️ Turnstile token 未检测到，尝试直接登录...")
 
     for attempt in range(3):
         print(f"🔑 点击登录按钮...(第 {attempt + 1} 次)")
